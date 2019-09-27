@@ -4,6 +4,7 @@ import java.text.Normalizer
 import java.util.regex.Pattern
 
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.JavaConverters._
 
 trait Tokenizer {
   def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)]
@@ -29,13 +30,34 @@ abstract class BertTokenizer(wordPieceTokenizer: WordPieceTokenizer) extends Enc
 }
 
 object WordPieceTokenizer {
-  val cased: String => String = identity
-  val uncased: String => String = token => {
-    Normalizer.normalize(token.toLowerCase, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "")
+  trait TextNormalizer {
+    def normalize(text: String): (String, Int => Int)
+  }
+  object Cased extends TextNormalizer {
+    override def normalize(text: String): (String, Int => Int) = (text, identity)
+  }
+  object Uncased extends TextNormalizer {
+    override def normalize(text: String): (String, Int => Int) = {
+      val lowerCaseText = text.toLowerCase
+      val normalizedText = Normalizer.normalize(lowerCaseText, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "")
+      val offsetMap: Int => Int = if (lowerCaseText == normalizedText) identity else {
+        var textIndex = 0
+        val offsets = text.codePoints().iterator.asScala.flatMap{
+          codePoint =>
+            val uniChar = new String(Character.toChars(codePoint))
+            val length = Normalizer.normalize(uniChar, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "").length
+            val offsets = IndexedSeq.fill(length)(textIndex)
+            textIndex += uniChar.length
+            offsets
+        }
+        offsets.toIndexedSeq :+ textIndex
+      }
+      (normalizedText, offsetMap)
+    }
   }
 }
 
-class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: String => String) extends Encoder {
+class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: WordPieceTokenizer.TextNormalizer) extends Encoder {
 
   private val tokenToIndex = vocab.zipWithIndex.toMap
   private val (firsts, others) = vocab.sortBy{-_.length}.partition(!_.startsWith("##"))
@@ -45,23 +67,25 @@ class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: St
   def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
     val (regionStart, regionEnd) = region
     // FIXME: this assumes normalizing the text does not change offsets, which is wrong
-    val normalizedText = textNormalizer(text)
-    val firstMatcher = firstRegex.matcher(normalizedText)
-    firstMatcher.region(regionStart, regionEnd)
-    val regions =
+    val (word, offsetMap) = textNormalizer.normalize(text.substring(regionStart, regionEnd))
+    val firstMatcher = firstRegex.matcher(word)
+    firstMatcher.region(0, word.length)
+    val wordPieceRegions =
       if (!firstMatcher.lookingAt()) {
         Array(region)
       } else {
         val buffer = ArrayBuffer(firstMatcher.start -> firstMatcher.end)
-        val otherMatcher = otherRegex.matcher(normalizedText)
-        otherMatcher.region(firstMatcher.end, regionEnd)
+        val otherMatcher = otherRegex.matcher(word)
+        otherMatcher.region(firstMatcher.end, word.length)
         while (otherMatcher.lookingAt()) {
           buffer += (otherMatcher.start -> otherMatcher.end)
-          otherMatcher.region(otherMatcher.end, regionEnd)
+          otherMatcher.region(otherMatcher.end, word.length)
         }
         if (!otherMatcher.hitEnd) Array(region) else buffer.toArray
       }
-    for (tokenRegion <- regions) yield (tokenRegion, normalizedText.substring(tokenRegion._1, tokenRegion._2))
+    for ((pieceStart, pieceEnd) <- wordPieceRegions) yield {
+      (regionStart + offsetMap(pieceStart), regionStart + offsetMap(pieceEnd)) -> word.substring(pieceStart, pieceEnd)
+    }
   }
 
   def encode(text: String, region: (Int, Int)): Array[((Int, Int), Int)] = {

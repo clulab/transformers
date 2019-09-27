@@ -46,7 +46,7 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
   "a cased BERT word-piece tokenizer" should {
     "produce the same word-pieces and encodings as in BERT's test_wordpiece_tokenizer and test_full_tokenizer" in {
       val vocab = Array("[UNK]", "[CLS]", "[SEP]", "want", "##want", "##ed", "wa", "un", "runn", "##ing", ",")
-      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.cased)
+      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.Cased)
 
       assert(tokenizer.tokenize("unwanted") === Array(
         ((0, 2), "un"),
@@ -83,7 +83,7 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
         "t", "##t", "##ti", "time", "##time",
         "i", "##i", "im", "##im", "##ime",
         "m", "##m", "me", "##me",
-        "e", "##e"), 0, WordPieceTokenizer.cased)
+        "e", "##e"), 0, WordPieceTokenizer.Cased)
       assert(tokenizer.tokenize("estime") === Array(
         ((0, 3), "est"),
         ((3, 6), "ime")))
@@ -99,7 +99,7 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
   "an uncased BERT word-piece tokenizer" should {
     "produce the same word-pieces and encodings as in BERT's test_wordpiece_tokenizer and test_full_tokenizer" in {
       val vocab = Array("[UNK]", "[CLS]", "[SEP]", "want", "##want", "##ed", "wa", "un", "runn", "##ing", ",")
-      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.uncased)
+      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.Uncased)
 
       assert(tokenizer.tokenize("UNwant\u00E9d") === Array(
         ((0, 2), "un"),
@@ -125,17 +125,12 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
       assert(tokenizer.encode("unwantedX") === Array(
         ((0, 9), 0)))
     }
-    "produce the same word-pieces and encodings as in BERT for some ambiguous cases" ignore {
+    "produce the same word-pieces and encodings as in BERT for some ambiguous cases" in {
       val vocab = Array("[UNK]", "[CLS]", "[SEP]", "want", "##want", "##ed", "wa", "un", "runn", "##ing", ",")
-      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.uncased)
-      assert(tokenizer.tokenize("UNwante\u0301d") === Array(
-        ((0, 2), "un"),
-        ((2, 4), "want"),
-        ((4, 7), "ed")))
+      val tokenizer = new WordPieceTokenizer(vocab, 0, WordPieceTokenizer.Uncased)
+      assert(tokenizer.tokenize("  W\u0302a\u0301nT\u00E9\u1E0E", (2, 10)) === Array(
+        ((2, 8), "want"),
+        ((8, 10), "ed")))
     }
-  }
-
-  private def assertTokenCodes(encoder: Encoder, text: String, codes: Array[Int]): Unit = {
-    assert(encoder.encode(text).map{ case (_, code) => code } === codes)
   }
 }
