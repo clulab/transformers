@@ -1,12 +1,13 @@
 package org.clulab.transformers
 
+import java.text.Normalizer
 import java.util.regex.Pattern
 
 import scala.collection.mutable.ArrayBuffer
 
 trait Tokenizer {
-  def tokenize(text: String, region: (Int, Int)): Array[(Int, Int)]
-  def tokenize(text: String): Array[(Int, Int)] = tokenize(text, (0, text.length))
+  def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)]
+  def tokenize(text: String): Array[((Int, Int), String)] = tokenize(text, (0, text.length))
 }
 
 trait Encoder extends Tokenizer {
@@ -14,48 +15,57 @@ trait Encoder extends Tokenizer {
   def encode(text: String, region: (Int, Int)): Array[((Int, Int), Int)]
 }
 
-class BertTokenizer(vocab: Array[String], unkIndex: Int) extends Encoder {
+abstract class BertTokenizer(wordPieceTokenizer: WordPieceTokenizer) extends Encoder {
 
   private val basicTokenizer = new BasicTokenizer
-  private val wordPieceTokenizer = new WordPieceTokenizer(vocab, unkIndex)
 
-  def tokenize(text: String, region: (Int, Int)): Array[(Int, Int)] = {
-    basicTokenizer.tokenize(text, region).flatMap(wordPieceTokenizer.tokenize(text, _))
+  def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
+    basicTokenizer.tokenize(text, region).flatMap{ case (region, _) => wordPieceTokenizer.tokenize(text, region) }
   }
 
   def encode(text: String, region: (Int, Int)): Array[((Int, Int), Int)] = {
-    basicTokenizer.tokenize(text, region).flatMap(wordPieceTokenizer.encode(text, _))
+    basicTokenizer.tokenize(text, region).flatMap{ case (region, _) => wordPieceTokenizer.encode(text, region) }
   }
 }
 
-class WordPieceTokenizer(vocab: Array[String], unkIndex: Int) extends Encoder {
+object WordPieceTokenizer {
+  val cased: String => String = identity
+  val uncased: String => String = token => {
+    Normalizer.normalize(token.toLowerCase, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "")
+  }
+}
+
+class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: String => String) extends Encoder {
 
   private val tokenToIndex = vocab.zipWithIndex.toMap
   private val (firsts, others) = vocab.sortBy{-_.length}.partition(!_.startsWith("##"))
   private val firstRegex = Pattern.compile(firsts.mkString("|"))
   private val otherRegex = Pattern.compile(others.map(_.substring(2)).mkString("|"))
 
-  def tokenize(text: String, region: (Int, Int)): Array[(Int, Int)] = {
-    val firstMatcher = firstRegex.matcher(text)
-    firstMatcher.region(region._1, region._2)
-    if (!firstMatcher.lookingAt()) {
-      Array(region)
-    } else {
-      val buffer = ArrayBuffer((firstMatcher.start, firstMatcher.end))
-      val otherMatcher = otherRegex.matcher(text)
-      otherMatcher.region(firstMatcher.end, text.length)
-      while (otherMatcher.lookingAt()) {
-        buffer += otherMatcher.start -> otherMatcher.end
-        otherMatcher.region(otherMatcher.end, text.length)
+  def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
+    val (regionStart, regionEnd) = region
+    // FIXME: this assumes normalizing the text does not change offsets, which is wrong
+    val normalizedText = textNormalizer(text)
+    val firstMatcher = firstRegex.matcher(normalizedText)
+    firstMatcher.region(regionStart, regionEnd)
+    val regions =
+      if (!firstMatcher.lookingAt()) {
+        Array(region)
+      } else {
+        val buffer = ArrayBuffer(firstMatcher.start -> firstMatcher.end)
+        val otherMatcher = otherRegex.matcher(normalizedText)
+        otherMatcher.region(firstMatcher.end, regionEnd)
+        while (otherMatcher.lookingAt()) {
+          buffer += (otherMatcher.start -> otherMatcher.end)
+          otherMatcher.region(otherMatcher.end, regionEnd)
+        }
+        if (!otherMatcher.hitEnd) Array(region) else buffer.toArray
       }
-      if (!otherMatcher.hitEnd) Array(region) else buffer.toArray
-    }
+    for (tokenRegion <- regions) yield (tokenRegion, normalizedText.substring(tokenRegion._1, tokenRegion._2))
   }
 
   def encode(text: String, region: (Int, Int)): Array[((Int, Int), Int)] = {
-    for ((tokenRegion, i) <- tokenize(text, region).zipWithIndex) yield {
-      val (start, end) = tokenRegion
-      val tokenText = text.substring(start, end)
+    for (((tokenRegion, tokenText), i) <- tokenize(text, region).zipWithIndex) yield {
       val index = tokenToIndex.getOrElse(if (i == 0) tokenText else "##" + tokenText, unkIndex)
       (tokenRegion, index)
     }
@@ -69,13 +79,14 @@ class BasicTokenizer extends Tokenizer {
       [\p{P}$+<=>^`|~]|                            # a single punctuation character, or
       [^\p{IsWhite_Space}\p{IsHan}\p{P}$+<=>^`|~]+ # several non-whitespace characters (excluding the above)""")
 
-  def tokenize(text: String, region: (Int, Int)): Array[(Int, Int)] = {
-    val buffer = ArrayBuffer.empty[(Int, Int)]
+  def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
+    val buffer = ArrayBuffer.empty[((Int, Int), String)]
     val matcher = tokenRegex.matcher(text)
     matcher.region(region._1, region._2)
     while (matcher.find()) {
-      if (!matcher.group().matches("""(?x)[\p{Cc}\p{Cf}]+  # all control characters""")) {
-        buffer += matcher.start -> matcher.end
+      val group = matcher.group()
+      if (!group.matches("""(?x)[\p{Cc}\p{Cf}]+  # all control characters""")) {
+        buffer += matcher.start -> matcher.end -> group
       }
     }
     buffer.toArray
