@@ -31,7 +31,7 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
         ((22, 23), "?")))
     }
     "produce the same token boundaries as BERT for some complex cases" in {
-      val text = "yyy,!\u535A\u0000\u63A8zzz \u0001 \u00AD abc \u0000w\u0000x\u00ADy\u00AD"
+      val text = "yyy,!\u535A\u0000\u63A8zzz \u0001 \u00AD abc \u0000w\u0000x\u00ADy\u0005\u00AD"
       assert(tokenizer.tokenize(text) === Array(
         ((0, 3), "yyy"),
         ((3, 4), ","),
@@ -40,7 +40,7 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
         ((7, 8), "\u63A8"),
         ((8, 11), "zzz"),
         ((16, 19), "abc"),
-        ((20, 27), "\u0000w\u0000x\u00ADy\u00AD")))
+        ((21, 26), "w\u0000x\u00ADy")))
     }
   }
   "a cased BERT word-piece tokenizer" should {
@@ -131,6 +131,9 @@ class BertTokenizerSpec  extends WordSpec with Matchers {
       assert(tokenizer.tokenize("  W\u0302a\u0301nT\u00E9\u1E0E", (2, 10)) === Array(
         ((2, 8), "want"),
         ((8, 10), "ed")))
+      assert(tokenizer.tokenize("\u00ADrun\u0000ni\u0001\u0002ng\u0005") === Array(
+        ((1, 6), "runn"),
+        ((6, 12), "ing")))
     }
   }
 }

@@ -37,18 +37,21 @@ object WordPieceTokenizer {
     override def normalize(text: String): (String, Int => Int) = (text, identity)
   }
   object Uncased extends TextNormalizer {
+    private def stripAccentsAndControlCharacters(text: String): String = {
+      Normalizer.normalize(text, Normalizer.Form.NFD).replaceAll("""[\p{Mn}\p{Cc}\p{Cf}]""", "")
+    }
+
     override def normalize(text: String): (String, Int => Int) = {
       val lowerCaseText = text.toLowerCase
-      val normalizedText = Normalizer.normalize(lowerCaseText, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "")
+      val normalizedText = stripAccentsAndControlCharacters(lowerCaseText)
       val offsetMap: Int => Int = if (lowerCaseText == normalizedText) identity else {
         var textIndex = 0
-        val offsets = text.codePoints().iterator.asScala.flatMap{
-          codePoint =>
-            val uniChar = new String(Character.toChars(codePoint))
-            val length = Normalizer.normalize(uniChar, Normalizer.Form.NFD).replaceAll("""\p{Mn}""", "").length
-            val offsets = IndexedSeq.fill(length)(textIndex)
-            textIndex += uniChar.length
-            offsets
+        val offsets = text.codePoints().iterator.asScala.flatMap{ codePoint =>
+          val uniChar = new String(Character.toChars(codePoint))
+          val length = stripAccentsAndControlCharacters(uniChar).length
+          val offsets = IndexedSeq.fill(length)(textIndex)
+          textIndex += uniChar.length
+          offsets
         }
         offsets.toIndexedSeq :+ textIndex
       }
@@ -66,7 +69,6 @@ class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: Wo
 
   def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
     val (regionStart, regionEnd) = region
-    // FIXME: this assumes normalizing the text does not change offsets, which is wrong
     val (word, offsetMap) = textNormalizer.normalize(text.substring(regionStart, regionEnd))
     val firstMatcher = firstRegex.matcher(word)
     firstMatcher.region(0, word.length)
@@ -101,17 +103,17 @@ class BasicTokenizer extends Tokenizer {
   private val tokenRegex = Pattern.compile("""(?x)
       \p{IsHan}|                                   # a single Chinese character, or
       [\p{P}$+<=>^`|~]|                            # a single punctuation character, or
-      [^\p{IsWhite_Space}\p{IsHan}\p{P}$+<=>^`|~]+ # several non-whitespace characters (excluding the above)""")
+      (?![\p{Cc}\p{Cf}])                           # not starting with a control character
+      [^\p{IsWhite_Space}\p{IsHan}\p{P}$+<=>^`|~]+ # several non-whitespace characters (excluding the above)
+      (?<![\p{Cc}\p{Cf}])                          # not ending with a control character
+  """)
 
   def tokenize(text: String, region: (Int, Int)): Array[((Int, Int), String)] = {
     val buffer = ArrayBuffer.empty[((Int, Int), String)]
     val matcher = tokenRegex.matcher(text)
     matcher.region(region._1, region._2)
     while (matcher.find()) {
-      val group = matcher.group()
-      if (!group.matches("""(?x)[\p{Cc}\p{Cf}]+  # all control characters""")) {
-        buffer += matcher.start -> matcher.end -> group
-      }
+      buffer += matcher.start -> matcher.end -> matcher.group()
     }
     buffer.toArray
   }
