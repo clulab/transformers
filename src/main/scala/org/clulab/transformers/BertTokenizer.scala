@@ -16,7 +16,7 @@ trait Encoder extends Tokenizer {
   def encode(text: String, region: (Int, Int)): Array[((Int, Int), Int)]
 }
 
-abstract class BertTokenizer(wordPieceTokenizer: WordPieceTokenizer) extends Encoder {
+class BertTokenizer(wordPieceTokenizer: WordPieceTokenizer) extends Encoder {
 
   private val basicTokenizer = new BasicTokenizer
 
@@ -64,6 +64,8 @@ class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: Wo
 
   private val tokenToIndex = vocab.zipWithIndex.toMap
   private val (firsts, others) = vocab.sortBy{-_.length}.partition(!_.startsWith("##"))
+  if (firsts.isEmpty || others.isEmpty) throw new UnsupportedOperationException(
+    s"Both firsts (n=${firsts.size}) and others (n=${others.size}) must be non-empty ")
   private val firstRegex = Pattern.compile(firsts.mkString("|"))
   private val otherRegex = Pattern.compile(others.map(_.substring(2)).mkString("|"))
 
@@ -72,21 +74,23 @@ class WordPieceTokenizer(vocab: Array[String], unkIndex: Int, textNormalizer: Wo
     val (word, offsetMap) = textNormalizer.normalize(text.substring(regionStart, regionEnd))
     val firstMatcher = firstRegex.matcher(word)
     firstMatcher.region(0, word.length)
-    val wordPieceRegions =
-      if (!firstMatcher.lookingAt()) {
-        Array(region)
-      } else {
-        val buffer = ArrayBuffer(firstMatcher.start -> firstMatcher.end)
-        val otherMatcher = otherRegex.matcher(word)
-        otherMatcher.region(firstMatcher.end, word.length)
-        while (otherMatcher.lookingAt()) {
-          buffer += (otherMatcher.start -> otherMatcher.end)
-          otherMatcher.region(otherMatcher.end, word.length)
-        }
-        if (!otherMatcher.hitEnd) Array(region) else buffer.toArray
+    if (!firstMatcher.lookingAt()) {
+      Array(region -> word)
+    } else {
+      val buffer = ArrayBuffer(firstMatcher.start -> firstMatcher.end)
+      val otherMatcher = otherRegex.matcher(word)
+      otherMatcher.region(firstMatcher.end, word.length)
+      while (otherMatcher.lookingAt()) {
+        buffer += (otherMatcher.start -> otherMatcher.end)
+        otherMatcher.region(otherMatcher.end, word.length)
       }
-    for ((pieceStart, pieceEnd) <- wordPieceRegions) yield {
-      (regionStart + offsetMap(pieceStart), regionStart + offsetMap(pieceEnd)) -> word.substring(pieceStart, pieceEnd)
+      if (!otherMatcher.hitEnd) {
+        Array(region -> word)
+      } else {
+        for ((pieceStart, pieceEnd) <- buffer.toArray) yield {
+          (regionStart + offsetMap(pieceStart), regionStart + offsetMap(pieceEnd)) -> word.substring(pieceStart, pieceEnd)
+        }
+      }
     }
   }
 
